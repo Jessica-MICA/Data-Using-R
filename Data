@@ -1,0 +1,147 @@
+# Set up working directory
+
+setwd("C:\\Jessica\\MICA\\PGP2\\AMMA\\data")
+
+# Read data
+c_balance<- read.csv(file = "c_balance.csv", stringsAsFactors = F)
+
+
+# --------------------- Multiple Regression -----------------------------
+
+sample_f <- sample(1:nrow(c_balance),0.6*nrow(c_balance), replace = F)
+sample_c_balance <- c_balance[sample_f,]
+
+
+# Obj: Estimate billed amount for next 3 months
+
+names(sample_c_balance)
+
+summary(sample_c_balance)
+
+# We can remove the customers who do not have any billed amount in the first 3 months
+sample_c_balance$Pre_billed_amt_3m <-apply(sample_c_balance[,c(7,8,9)],1, sum)
+
+summary(sample_c_balance)
+quantile(sample_c_balance$Pre_billed_amt_3m, probs = seq(0,1,0.05))
+
+
+# Exclude with negative billed amount
+sample_c_balance <- sample_c_balance[sample_c_balance$Pre_billed_amt_3m>30,]
+
+# Target Variable: Average Balance in next 3 month
+sample_c_balance$billed_3m <-apply(sample_c_balance[,c(10,11,12)],1, mean)
+
+
+quantile(sample_c_balance$billed_3m, probs = seq(0,1,0.05))
+
+hist(sample_c_balance$billed_3m,breaks = 20)
+
+quantile(sample_c_balance$billed_3m, probs = seq(0,1,0.05))
+
+# Outlier Treatment of Target Variables
+sample_c_balance$billed_3m <- ifelse(sample_c_balance$billed_3m>165000,165000,
+                                    ifelse(sample_c_balance$billed_3m<0,0,sample_c_balance$billed_3m))
+
+names(sample_c_balance)
+
+# Regression MOdel fitting
+card_billed_amt_reg <- lm(billed_3m~AGE+Pre_billed_amt_3m+Billed_amount_1+Billed_amount_2,
+                          data=sample_c_balance)
+
+summary(card_billed_amt_reg)
+
+sample_c_balance$pred_bill_amt <- predict(card_billed_amt_reg,sample_c_balance)
+
+plot(sample_c_balance$billed_3m,
+     sample_c_balance$pred_bill_amt,
+     pch=20,
+     col="red")
+abline(lm(sample_c_balance$billed_3m ~ sample_c_balance$pred_bill_amt),col="blue",lwd=4)
+
+# --------------------- Logistic Regression -----------------------------
+
+# Target Variable: If Billed Amount reduces below 20%
+
+names(sample_c_balance)
+
+sample_c_balance$Pred_bill_drop <- ifelse (sample_c_balance$billed_3m < 0.2*sample_c_balance$Pre_billed_amt_3m,1,0)
+
+table(sample_c_balance$Pred_bill_drop)
+
+# Demographic Variables
+
+Billed_amt_drop_logit <- glm(formula = Pred_bill_drop~
+                               AGE+Pre_billed_amt_3m+Billed_amount_1+Payment_1+Payment_2+Payment_3+
+                               Billed_amount_2
+                             ,
+                             family=binomial,
+                             data=sample_c_balance)
+summary(Billed_amt_drop_logit)
+
+# Predict
+sample_c_balance$Pred_Amt_drop_prob <- predict(Billed_amt_drop_logit,
+                                              sample_c_balance,
+                                              type = c("response"))
+
+table(sample_c_balance$Pred_bill_drop)/nrow(sample_c_balance)
+quantile(sample_c_balance$Pred_Amt_drop_prob, 
+         probs = seq(0,1,0.05))
+
+sample_c_balance$Pred_Amt_drop_Class <- ifelse(sample_c_balance$Pred_Amt_drop_prob >0.288,1,0)
+
+table(sample_c_balance$Pred_Amt_drop_Class,sample_c_balance$Pred_bill_drop)
+
+library(caret)
+
+# Create Confusion Matrix
+confusionMatrix(data=factor(sample_c_balance$Pred_Amt_drop_Class),
+                reference=sample_c_balance$Pred_bill_drop,
+                positive='1')
+
+library("ROCR")
+
+perf.obj <- prediction(predictions=sample_c_balance$Pred_Amt_drop_Class,
+                       labels=sample_c_balance$Pred_bill_drop)
+# Get data for ROC curve
+roc.obj <- performance(perf.obj, measure="tpr", x.measure="fpr")
+plot(roc.obj,
+     main="Balance Amt Drop - ROC Curves",
+     xlab="1 - Specificity: False Positive Rate",
+     ylab="Sensitivity: True Positive Rate",
+     col="blue")
+abline(0,1,col="grey")
+
+#--------------------------  Decision Tree: CART -----------------------------------
+
+install.packages("rpart")
+install.packages("rpart.plot")
+
+library(rpart)
+dt1 <- rpart(Pred_bill_drop~AGE+Pre_billed_amt_3m+Billed_amount_1+Payment_1+Payment_2+Payment_3+
+               Billed_amount_2,
+             data=sample_c_balance)
+
+library(rpart.plot)
+rpart.plot(dt1)
+
+install.packages("libcoin")
+install.packages("partykit")
+install.packages("CHAID", repos="http://R-Forge.R-project.org")
+library(CHAID)
+library(help=CHAID)
+
+sample_c_balance1 <- sample_c_balance
+sample_c_balance1$AGE_cat <- cut(sample_c_balance1$AGE,
+                                quantile(sample_c_balance1$AGE, probs = seq(0,1,0.05)))
+sample_c_balance1$Pre_billed_amt_3m_cat <- cut(sample_c_balance1$Pre_billed_amt_3m,
+                                              quantile(sample_c_balance1$Pre_billed_amt_3m, probs = seq(0,1,0.05)))
+sample_c_balance1$Payment_1_cat <- cut(sample_c_balance1$Payment_1,
+                                      unique(quantile(sample_c_balance1$Payment_1, probs = seq(0,1,0.05))))
+
+dt.chaid <- chaid(as.factor(Pred_bill_drop)~AGE_cat+Pre_billed_amt_3m_cat+Payment_1_cat,
+                  data=sample_c_balance1)
+
+
+dt.chaid
+
+plot(dt.chaid) 
